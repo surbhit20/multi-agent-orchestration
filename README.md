@@ -89,16 +89,17 @@ python -m distributed.launch --players 5
 
 ### The player: two agents, one voice
 
-Each player is a pair of LLM agents with different jobs, and usually different models:
+Each player is a pair of LLM agents with different jobs, and usually different models: a
+cheap, fast **scheduler** and a stronger **generator**.
 
 ```mermaid
-flowchart LR
-    T[Chat transcript<br/>+ who is typing] --> S{Scheduler<br/><i>cheap, fast model</i><br/>Should I speak now?}
-    S -- no --> W[Stay quiet,<br/>wait for the next change]
-    S -- yes --> TY[Announce<br/>'Player N is typing...']
-    TY --> G[Generator<br/><i>strong model</i><br/>Write the message in character]
-    G --> D[Wait as long as a human<br/>would take to type it]
-    D --> P[Post to the chat]
+flowchart TB
+    T["Chat so far<br/>+ who's typing"] --> S{"Scheduler:<br/>speak now?"}
+    S -- no --> W["Stay quiet<br/>until the<br/>chat changes"]
+    S -- yes --> TY["Show<br/>'is typing...'"]
+    TY --> G["Generator<br/>writes reply"]
+    G --> D["Wait human<br/>typing time"]
+    D --> P["Post to chat"]
 ```
 
 - **Scheduler** (`agent/scheduler.py`) runs every time the conversation changes and
@@ -145,19 +146,17 @@ to talk.
 ```mermaid
 flowchart TB
     subgraph proc["One Python process"]
-        C["Game controller<br/>(game/*/controller.py)"]
-        CTX[("Context<br/>shared transcript<br/>+ typing buffer")]
-        BUS{{"Event bus<br/>in-memory or Kafka"}}
-        P0["Player 0<br/>scheduler + generator"]
-        P1["Player 1"]
-        PN["Player N"]
+        C["Game<br/>controller"]
+        P["Players<br/>(async tasks)"]
+        CTX[("Context<br/>transcript +<br/>typing")]
+        BUS{{"Event bus"}}
     end
     K[("Kafka topic<br/>agent-events")]
 
-    P0 & P1 & PN -- "read transcript /<br/>post messages" --> CTX
-    CTX -- "publish every change" --> BUS
-    BUS -- "event: wake idle players" --> C
-    C -- "start player task" --> P0 & P1 & PN
+    C -- "wake idle players" --> P
+    P -- "read / post" --> CTX
+    CTX -- "every change" --> BUS
+    BUS -- "new event" --> C
     BUS -. "EVENT_BUS=kafka" .-> K
 ```
 
@@ -182,19 +181,19 @@ The bus has two interchangeable backends, selected by `EVENT_BUS`:
 
 ### Distributed mode
 
-Here Kafka is not a side channel: it is the *only* thing connecting the agents. Every
-player is a separate OS process with no shared memory, and each could run on its own
-machine.
+Here Kafka is not a side channel: it is the *only* thing connecting the agents. The
+referee and every player are separate OS processes with no shared memory, and each could
+run on its own machine.
 
 ```mermaid
 flowchart LR
-    R["Referee process<br/>(distributed/referee.py)<br/>roles · timer · votes · kills"]
-    T[("Kafka topic<br/>game.&lt;id&gt;<br/>1 partition, total order")]
-    P0["Player 0 process<br/>own transcript copy"]
-    P1["Player 1 process"]
-    P2["Player 2 process"]
-    PN["Player N process"]
-    X["Anything else:<br/>bus.tail, dashboards,<br/>analysts, moderators"]
+    R["Referee<br/>rules + timer"]
+    P0["Player 0"]
+    P1["Player 1"]
+    P2["Player 2"]
+    PN["Player N"]
+    T[("Kafka topic<br/>one per game<br/>1 partition")]
+    X["Other readers<br/>bus.tail,<br/>dashboards"]
 
     R <--> T
     P0 <--> T
