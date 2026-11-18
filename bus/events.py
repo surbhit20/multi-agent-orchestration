@@ -16,6 +16,10 @@ class Event:
     sender: str
     text: str = ""
     ts: float = field(default_factory=time.time)
+    # Recipient for private events (role assignment, kill request); None = everyone.
+    to: str | None = None
+    # Structured payload, e.g. {"vote": 3} or {"role": "Mafia"}.
+    data: dict | None = None
 
     def to_bytes(self) -> bytes:
         return json.dumps(asdict(self)).encode("utf-8")

@@ -35,7 +35,8 @@ async def main() -> None:
             if args.game and event.game_id != args.game:
                 continue
             ts = datetime.fromtimestamp(event.ts).strftime("%H:%M:%S")
-            print(f"[{ts}] {event.game_id[:8]} {event.kind:<13} {event.sender}: {event.text.replace(chr(10), ' | ')}", flush=True)
+            sender = f"{event.sender} -> {event.to}" if event.to else event.sender
+            print(f"[{ts}] {event.game_id[:8]} {event.kind:<13} {sender}: {event.text.replace(chr(10), ' | ')}", flush=True)
     finally:
         await consumer.stop()
 

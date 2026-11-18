@@ -30,7 +30,7 @@ class KafkaBus(EventBus):
         self._consume_task: asyncio.Task | None = None
 
     async def start(self) -> None:
-        partitions = await self._ensure_topic()
+        partitions = await ensure_topic(self.bootstrap_servers, self.topic, self.partitions)
 
         self._producer = AIOKafkaProducer(bootstrap_servers=self.bootstrap_servers)
         await self._producer.start()
@@ -71,20 +71,21 @@ class KafkaBus(EventBus):
                 continue
             self._fan_out(event)
 
-    async def _ensure_topic(self) -> list[int]:
-        """Create the topic if needed and return its partition ids."""
-        admin = AIOKafkaAdminClient(bootstrap_servers=self.bootstrap_servers)
-        await admin.start()
+
+async def ensure_topic(bootstrap_servers: str, topic: str, partitions: int = 1) -> list[int]:
+    """Create `topic` if needed and return its partition ids."""
+    admin = AIOKafkaAdminClient(bootstrap_servers=bootstrap_servers)
+    await admin.start()
+    try:
         try:
-            try:
-                await admin.create_topics([NewTopic(self.topic, num_partitions=self.partitions, replication_factor=1)])
-            except TopicAlreadyExistsError:
-                pass
-            for _ in range(20):
-                [desc] = await admin.describe_topics([self.topic])
-                if desc.get("partitions"):
-                    return sorted(p["partition"] for p in desc["partitions"])
-                await asyncio.sleep(0.25)  # freshly created topic: wait for leaders
-            raise RuntimeError(f"Kafka topic {self.topic!r} has no partitions after creation")
-        finally:
-            await admin.close()
+            await admin.create_topics([NewTopic(topic, num_partitions=partitions, replication_factor=1)])
+        except TopicAlreadyExistsError:
+            pass
+        for _ in range(20):
+            [desc] = await admin.describe_topics([topic])
+            if desc.get("partitions"):
+                return sorted(p["partition"] for p in desc["partitions"])
+            await asyncio.sleep(0.25)  # freshly created topic: wait for leaders
+        raise RuntimeError(f"Kafka topic {topic!r} has no partitions after creation")
+    finally:
+        await admin.close()

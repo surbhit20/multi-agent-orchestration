@@ -70,6 +70,51 @@ events stay ordered on one partition):
 `kind` is one of `message`, `typing` or `round_started`. Votes, kills and eliminations
 arrive as `message` events because they're posted to the transcript.
 
+### Distributed mode: one process per player
+
+`distributed/` runs Mafia with Kafka as the *only* link between agents. Each player is
+its own process (it could be on its own machine), and a small **referee** process runs
+the rules:
+
+```bash
+docker compose up -d
+```
+
+```bash
+python -m distributed.launch --players 5
+```
+
+The launcher just starts `distributed.referee` and one `distributed.player` per seat
+with a shared game id. You can start them yourself, on different machines, as long as
+they point at the same broker:
+
+```bash
+python -m distributed.referee --game my-game --players 5
+```
+
+```bash
+python -m distributed.player --game my-game --id 0
+```
+
+How it fits together:
+
+- **One topic per game** (`game.<id>`, a single partition), so every process sees every
+  event in the same order.
+- **Players build their own view.** Each player reads the topic from the start and
+  rebuilds the chat transcript and "is typing…" state from events. There is no shared
+  memory. A player that crashes can be restarted and catches up by replaying the topic.
+  Events from before the restart only rebuild state; they never trigger actions again.
+- **Referee = light orchestrator.** It assigns roles, opens and closes discussion,
+  asks each player for a vote in turn, asks the Mafia for a kill, and announces results,
+  all as Kafka events. During discussion it only keeps time: players decide for
+  themselves when to speak.
+- **Private events** (role assignment, kill request and reply) carry a `to` field and
+  are left out of every other player's transcript. This keeps honest agents honest; it
+  is not access control, since anyone with access to the topic can read them.
+
+Event kinds are listed in `distributed/protocol.py`. `python -m bus.tail --topic
+game.<id> --from-beginning` prints a whole game, private events included.
+
 ## Project layout
 
 ```
@@ -92,6 +137,13 @@ bus/
   memory.py                 in-process backend (default)
   kafka.py                  Kafka backend (aiokafka)
   tail.py                   CLI that prints a game's events live from Kafka
+
+distributed/                Mafia with one process per player, linked only by Kafka
+  launch.py                 starts a referee + N players locally
+  referee.py                game rules: roles, rounds, votes, night kill
+  player.py                 one autonomous player
+  channel.py                a process's connection to a game's topic
+  protocol.py               event kinds
 docker-compose.yml          single-node Kafka for local runs
 
 game/
@@ -146,7 +198,8 @@ GAME=undercover python main.py
 
 `.github/workflows/run-game.yml` runs one game on a GitHub runner, with a Kafka service
 container and the `OPENAI_API_KEY` repository secret (Settings → Secrets and variables →
-Actions). Start it from the Actions tab ("Run game" → Run workflow) and pick the game;
+Actions). Start it from the Actions tab ("Run game" → Run workflow) and pick the game
+and the mode (`in-process` or `distributed`);
 the transcript and the Kafka event dump are uploaded as a run artifact.
 
 ### Running with Kafka

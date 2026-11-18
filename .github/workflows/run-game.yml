@@ -10,9 +10,11 @@ on:
         type: choice
         options: [mafia, undercover]
         default: mafia
-  push:
-    branches: ["claude/**"]
-    paths: [".github/workflows/run-game.yml"]
+      mode:
+        description: "in-process: one Python program. distributed: referee + one process per player, talking only via Kafka (Mafia only)."
+        type: choice
+        options: [in-process, distributed]
+        default: in-process
 
 jobs:
   run-game:
@@ -26,6 +28,7 @@ jobs:
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       GAME: ${{ inputs.game || 'mafia' }}
+      MODE: ${{ inputs.mode || 'in-process' }}
       EVENT_BUS: kafka
       KAFKA_BOOTSTRAP_SERVERS: localhost:9092
       PYTHONUNBUFFERED: "1"
@@ -71,11 +74,24 @@ jobs:
           PY
 
       - name: Run game
-        run: python main.py
+        run: |
+          mkdir -p logs
+          if [ "$MODE" = distributed ]; then
+            [ "$GAME" = mafia ] || { echo "::error::distributed mode only supports mafia"; exit 1; }
+            python -m distributed.launch --players 5 | tee logs/launch.txt
+          else
+            python main.py
+          fi
 
       - name: Dump events from Kafka
         if: always()
-        run: timeout 20 python -m bus.tail --from-beginning > logs/kafka-events.txt || true
+        run: |
+          mkdir -p logs
+          topic=agent-events
+          if [ -f logs/launch.txt ]; then
+            topic=$(grep -o 'game\.[0-9a-f-]*' logs/launch.txt | head -1)
+          fi
+          timeout 20 python -m bus.tail --topic "$topic" --from-beginning > logs/kafka-events.txt || true
 
       - name: Upload logs
         if: always()
