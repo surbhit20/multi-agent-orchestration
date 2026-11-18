@@ -1,0 +1,85 @@
+name: Run game
+
+# Runs one full game against the real OpenAI API, using the OPENAI_API_KEY
+# repository secret, with events streamed through a Kafka service container.
+on:
+  workflow_dispatch:
+    inputs:
+      game:
+        description: Which game to run
+        type: choice
+        options: [mafia, undercover]
+        default: mafia
+  push:
+    branches: ["claude/**"]
+    paths: [".github/workflows/run-game.yml"]
+
+jobs:
+  run-game:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      kafka:
+        image: apache/kafka:3.9.1
+        ports:
+          - 9092:9092
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      GAME: ${{ inputs.game || 'mafia' }}
+      EVENT_BUS: kafka
+      KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check for API key
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "::error::Add an OPENAI_API_KEY repository secret (Settings > Secrets and variables > Actions)."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: pip install openai-agents pydantic python-dotenv aiokafka
+
+      - name: Wait for Kafka
+        run: |
+          python - <<'PY'
+          import asyncio
+          from aiokafka.admin import AIOKafkaAdminClient
+
+          async def main():
+              for attempt in range(60):
+                  admin = AIOKafkaAdminClient(bootstrap_servers="localhost:9092")
+                  try:
+                      await admin.start()
+                      await admin.list_topics()
+                      print("Kafka is ready")
+                      return
+                  except Exception as exc:
+                      print(f"waiting for Kafka ({exc.__class__.__name__})")
+                      await asyncio.sleep(2)
+                  finally:
+                      await admin.close()
+              raise SystemExit("Kafka did not become ready")
+
+          asyncio.run(main())
+          PY
+
+      - name: Run game
+        run: python main.py
+
+      - name: Dump events from Kafka
+        if: always()
+        run: timeout 20 python -m bus.tail --from-beginning > logs/kafka-events.txt || true
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.GAME }}-logs
+          path: logs/*

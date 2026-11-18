@@ -136,17 +136,18 @@ Mafia is what `main.py` runs by default:
 python main.py
 ```
 
-To play Undercover, point `main.py` at the other controller:
+To play Undercover, set `GAME`:
 
-```python
-from game.undercover.controller import Game
-from logger_config import setup_logging
-import asyncio
-
-logger = setup_logging(game_name="undercover")
-game = Game(n_players=5, n_imposters=1)
-asyncio.run(game.start_game())
+```bash
+GAME=undercover python main.py
 ```
+
+### Running on GitHub Actions
+
+`.github/workflows/run-game.yml` runs one game on a GitHub runner, with a Kafka service
+container and the `OPENAI_API_KEY` repository secret (Settings → Secrets and variables →
+Actions). Start it from the Actions tab ("Run game" → Run workflow) and pick the game;
+the transcript and the Kafka event dump are uploaded as a run artifact.
 
 ### Running with Kafka
 
