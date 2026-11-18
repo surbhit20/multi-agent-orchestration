@@ -29,7 +29,7 @@ class Player:
         response = await Runner().run(starting_agent=self.scheduler, input=context)
         response = response.final_output
         
-        if response.should_speak == "false": return False
+        if not response.should_speak: return False
         self.is_idle = False
         await self.context_manager.add_typing(self.name)
 
