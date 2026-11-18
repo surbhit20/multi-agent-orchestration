@@ -3,6 +3,8 @@ from context.Context import Context
 import asyncio
 import random
 import time
+import uuid
+from bus import create_bus_from_env
 from game.mafia.prompts import SCHEDULER_INSTRUCTIONS, VOTING_PROMPT, KILL_PROMPT, GENERATOR_INSTRUCTIONS
 from collections import defaultdict
 from logger_config import get_logger
@@ -24,8 +26,18 @@ class Game:
         self.players = {i: MafiaPlayer(f"Player {i}", "Civilian" if i != self.mafia_idx else "Mafia", config) for i in range(self.n_players)}
         self.context_manager = Context(game_name=game_name)
         self.logger = get_logger('controller', game_name=game_name)
+        self.game_id = str(uuid.uuid4())
+        self.bus = create_bus_from_env()
+        self.context_manager.attach_bus(self.bus, self.game_id)
 
     async def start_game(self):
+        await self.bus.start()
+        try:
+            await self._play()
+        finally:
+            await self.bus.stop()
+
+    async def _play(self):
         round_num = 1
         print(f"\n🎮 Game started with {self.n_players} players")
         print(f"🕵️ Mafia is Player: {self.mafia_idx}\n")
@@ -51,31 +63,25 @@ class Game:
     async def run_round(self, round_num: int, duration_minutes: int = 1.5):
         print(f"\n🔄 Starting round {round_num} (duration: {duration_minutes} minutes)")
         self.logger.info(f"Starting round {round_num} (duration: {duration_minutes} minutes)")
-        prev_context = await self.context_manager.get_context()
+        # Subscribe before announcing the round so the announcement itself wakes everyone.
+        events = self.bus.subscribe(self.game_id)
         await self.context_manager.start_round(round_num, duration_minutes, list(self.players.keys()))
         
-        start_time = time.time()
-        duration_seconds = duration_minutes * 60
+        deadline = time.monotonic() + duration_minutes * 60
         player_tasks = []  # Track all player tasks
         
-        while time.time() - start_time < duration_seconds:   
-            current_context = await self.context_manager.get_context()
-            
-            # Only proceed if context has changed
-            if current_context != prev_context:
-                # Get all idle players
+        try:
+            # Wake idle players whenever the transcript changes (a message, a typing
+            # indicator, or the round announcement) until the round's time is up.
+            while (remaining := deadline - time.monotonic()) > 0:
+                if not await events.wait_for_activity(timeout=remaining):
+                    break
                 idle_players = [player for player in self.players.values() if player.is_idle]
-                
                 for player in idle_players:
                     self.logger.debug(f"Starting task for idle player: {player.name}")
-                    task = asyncio.create_task(player.run())
-                    player_tasks.append(task)  # Keep track of the task
-                
-                # Update previous context for next iteration
-                prev_context = current_context
-            else:
-                # Small delay to prevent busy waiting when no changes occur
-                await asyncio.sleep(1)
+                    player_tasks.append(asyncio.create_task(player.run()))
+        finally:
+            events.close()
         
         # Wait for all player tasks to complete before ending the round
         if player_tasks:

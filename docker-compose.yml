@@ -1,0 +1,8 @@
+# Single-node Kafka (KRaft mode, no ZooKeeper) for running games with EVENT_BUS=kafka.
+#   docker compose up -d
+services:
+  kafka:
+    image: apache/kafka:3.9.1
+    container_name: kafka
+    ports:
+      - "9092:9092"

@@ -3,6 +3,8 @@ from context.Context import Context
 import asyncio
 import random
 import time
+import uuid
+from bus import create_bus_from_env
 from game.undercover.prompts import SCHEDULER_INSTRUCTIONS, VOTING_PROMPT, CONTRIBUTE_WORD_PROMPT, GENERATOR_INSTRUCTIONS
 from collections import defaultdict
 from logger_config import get_logger
@@ -32,6 +34,9 @@ class Game:
         self.round_duration = round_duration
         self.context_manager = Context(game_name=self.name)
         self.logger = get_logger('controller', game_name=self.name)
+        self.game_id = str(uuid.uuid4())
+        self.bus = create_bus_from_env()
+        self.context_manager.attach_bus(self.bus, self.game_id)
 
         self._init_players(n_players, n_imposters)
     
@@ -56,6 +61,13 @@ class Game:
         return random.choice(words)
 
     async def start_game(self):
+        await self.bus.start()
+        try:
+            await self._play()
+        finally:
+            await self.bus.stop()
+
+    async def _play(self):
         round_num = 1
         # print(f"\n[GAME] Game started with {self.n_players} players")
         # print(f"[GAME] Imposters are Players: {", ".join(map(str, self.imposters))}\n")
@@ -104,26 +116,21 @@ class Game:
 
 
     async def discussion_round(self, round_details: dict):
-        prev_context = await self.context_manager.get_context()
+        events = self.bus.subscribe(self.game_id)
         await self.context_manager.start_round(round_details['Round Number'], self.round_duration, round_details['Players'])
         
-        start_time = time.time()
-        duration_seconds = self.round_duration * 60
+        deadline = time.monotonic() + self.round_duration * 60
         player_tasks = [] 
         
-        while time.time() - start_time < duration_seconds:   
-            current_context = await self.context_manager.get_context()
-            
-            if current_context != prev_context:
+        try:
+            while (remaining := deadline - time.monotonic()) > 0:
+                if not await events.wait_for_activity(timeout=remaining):
+                    break
                 idle_players = [player for player in self.players.values() if player.is_idle]
-                
                 for player in idle_players:
-                    task = asyncio.create_task(player.run())
-                    player_tasks.append(task)  
-                
-                prev_context = current_context
-            else:
-                await asyncio.sleep(5)
+                    player_tasks.append(asyncio.create_task(player.run()))
+        finally:
+            events.close()
         
         if player_tasks:
             await asyncio.gather(*player_tasks)

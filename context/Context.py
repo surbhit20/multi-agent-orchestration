@@ -1,6 +1,8 @@
 import asyncio
 from datetime import datetime, timedelta
 from logger_config import get_logger
+from bus import Event, EventBus
+from bus import events as ev
 
 class Context:
     _instance = None
@@ -19,6 +21,17 @@ class Context:
             self.game_name = game_name
             Context._initialized = True
             self.logger = get_logger('context', game_name=game_name)
+            self.bus: EventBus | None = None
+            self.game_id: str | None = None
+
+    def attach_bus(self, bus: EventBus, game_id: str) -> None:
+        """Publish every transcript change to `bus`, tagged with `game_id`."""
+        self.bus = bus
+        self.game_id = game_id
+
+    async def _publish(self, kind: str, sender: str, text: str = "") -> None:
+        if self.bus is not None:
+            await self.bus.publish(Event(game_id=self.game_id, kind=kind, sender=sender, text=text))
 
     async def add_message(self, from_user: str, message: str) -> None:
         timestamp = self._get_timestamp()
@@ -29,10 +42,12 @@ class Context:
             self.messages += formatted_message + "\n"
             if from_user in self.buffer:
                 self.buffer.remove(from_user)
+        await self._publish(ev.MESSAGE, from_user, message)
 
     async def add_typing(self, from_user: str) -> None:
         async with self.lock:
             self.buffer.add(from_user)
+        await self._publish(ev.TYPING, from_user)
     
     def _get_timestamp(self) -> str:
         return datetime.now().strftime("%H:%M:%S")
@@ -60,6 +75,7 @@ class Context:
             content += f"[{timestamp}] Players Alive: {players}\n"
             self.messages += content
             self.buffer = set()
+        await self._publish(ev.ROUND_STARTED, "Game", content.strip())
 
 async def main():
     pass
